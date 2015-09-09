@@ -1,5 +1,20 @@
 #!/usr/bin/env node
 
+/*
+  Determine Basal
+
+  Released under MIT license. See the accompanying LICENSE.txt file for
+  full terms and conditions
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  THE SOFTWARE.
+*/
+
 function getLastGlucose(data) {
     
     var now = data[0];
@@ -30,9 +45,9 @@ function setTempBasal(rate, duration) {
     if (rate < 0) { rate = 0; } // if >30m @ 0 required, zero temp will be extended to 30m instead
     else if (rate > maxSafeBasal) { rate = maxSafeBasal; }
     
-    // rather than canceling temps, always set the current basal as a 30m temp
+    // rather than canceling temps, if Offline mode is set, always set the current basal as a 30m temp
     // so we can see on the pump that openaps is working
-    if (duration == 0) {
+    if (duration == 0 && offline_input == 'Offline') {
         rate = profile_data.current_basal;
         duration  = 30;
     }
@@ -149,10 +164,10 @@ if (!module.parent) {
                     if (temps_data.duration > 0) { // if there is currently any temp basal running
                         // if it's a low-temp and eventualBG < profile_data.max_bg, let it run a bit longer
                         if (temps_data.rate <= profile_data.current_basal && eventualBG < profile_data.max_bg) {
-                            reason = "BG" + tick + " but " + eventualBG + "<" + profile_data.max_bg;
+                            reason = "BG" + tick + " but eventualBG " + eventualBG + "<" + profile_data.max_bg;
                             console.error(reason);
                         } else {
-                            reason = glucose_status.delta + " and " + eventualBG;
+                            reason = tick + " and eventualBG " + eventualBG;
                             setTempBasal(0, 0); // cancel temp
                         }
                     } else {
@@ -165,10 +180,10 @@ if (!module.parent) {
                     if (snoozeBG > profile_data.min_bg) { // if adding back in the bolus contribution BG would be above min
                         // if BG is falling and high-temped, or rising and low-temped, cancel
                         if (glucose_status.delta < 0 && temps_data.rate > profile_data.current_basal) {
-                            reason = tick + " and " + temps_data.rate + ">" + profile_data.current_basal;
+                            reason = tick + " and temp " + temps_data.rate + " > basal " + profile_data.current_basal;
                             setTempBasal(0, 0); // cancel temp
                         } else if (glucose_status.delta > 0 && temps_data.rate < profile_data.current_basal) {
-                            reason = tick + " and " + temps_data.rate + "<" + profile_data.current_basal;
+                            reason = tick + " and temp " + temps_data.rate + " < basal " + profile_data.current_basal;
                             setTempBasal(0, 0); // cancel temp
                         } else {
                             reason = "bolus snooze: eventual BG range " + eventualBG + "-" + snoozeBG;
@@ -185,7 +200,7 @@ if (!module.parent) {
                         rate = Math.round( rate * 1000 ) / 1000;
                         // if required temp < existing temp basal
                         if (typeof temps_data.rate !== 'undefined' && (temps_data.duration > 0 && rate > temps_data.rate - 0.1)) {
-                            reason = temps_data.rate + "<~" + rate;
+                            reason = "temp " + temps_data.rate + " <~ req " + rate + "U/hr";
                             console.error(reason);
                         } else {
                             reason = "Eventual BG " + eventualBG + "<" + profile_data.min_bg;
@@ -198,13 +213,12 @@ if (!module.parent) {
                     // if iob is over max, just cancel any temps
                     var basal_iob = iob_data.iob - iob_data.bolusiob;
                     if (basal_iob > max_iob) {
-                        reason = basal_iob + ">" + max_iob;
+                        reason = "IOB " + basal_iob + ">" + max_iob;
                         setTempBasal(0, 0);
                     }
                     // calculate 30m high-temp required to get projected BG down to target
                     // additional insulin required to get down to max bg:
                     var insulinReq = (eventualBG - target_bg) / profile_data.sens;
-                    //TODO: verify this is working
                     // if that would put us over max_iob, then reduce accordingly
                     insulinReq = Math.min(insulinReq, max_iob-basal_iob);
 
@@ -217,15 +231,15 @@ if (!module.parent) {
                         //console.error(maxSafeBasal);
                     }
                     var insulinScheduled = temps_data.duration * (temps_data.rate - profile_data.current_basal) / 60;
-                    if (insulinScheduled > insulinReq + 0.1) { // if current temp would deliver more than the required insulin (plus a 0.1U fudge factor), lower the rate
-                        reason = temps_data.duration + "@" + temps_data.rate + " > " + insulinReq + "U";
+                    if (insulinScheduled > insulinReq + 0.3) { // if current temp would deliver >0.3U more than the required insulin, lower the rate
+                        reason = temps_data.duration + "@" + temps_data.rate + " > req " + insulinReq + "U";
                         setTempBasal(rate, 30);
                     }
                     else if (typeof temps_data.rate !== 'undefined' && (temps_data.duration > 0 && rate < temps_data.rate + 0.1)) { // if required temp < existing temp basal
-                        reason = temps_data.rate + ">~" + rate;
+                        reason = "temp " + temps_data.rate + " >~ req " + rate + "U/hr";
                         console.error(reason);
                     } else { // required temp > existing temp basal
-                        reason = temps_data.rate + "<" + rate;
+                        reason = "temp " + temps_data.rate + "<" + rate + "U/hr";
                         setTempBasal(rate, 30);
                     }
         
@@ -251,7 +265,7 @@ if (!module.parent) {
             console.error(reason);
         }
     } else {
-        reason = "BG data is too old";
+        reason = "BG data is too old, or clock set incorrectly";
         console.error(reason);
     }
 
